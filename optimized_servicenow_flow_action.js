@@ -1,7 +1,5 @@
 (function execute(inputs, outputs) {
     /**
-     * ServiceNow Flow Action Script - Chempax Purchase Order Integration
-     * 
      * This script prepares and sends purchase order data to the Chempax system.
      * It handles authentication, data transformation, and payload generation.
      * 
@@ -20,7 +18,9 @@
         COST_TABLE: 'sn_shop_cost_allocation',
         BASE_COST_CATEGORY: 'RMC',
         BASE_COST_TYPE: 'Additional',
-        BASE_COST_SEQUENCE: 0
+        BASE_COST_SEQUENCE: 0,
+        DEFAULT_CURRENCY: 'USD',
+        DEFAULT_EXRATE: 1
     };
 
     // === Initialize utilities and services ===
@@ -160,8 +160,8 @@
             UnitOfMeasure: lineRec.getDisplayValue('uom').toString().charAt(0),
             UnitOfPackaging: getFieldValue(supRec.product_model.x_supr2_supreme_ca_packaging),
             Quantity: Number(lineRec.purchased_quantity),
-            QuantityUM: "Packages",
-            Costs: buildLineItemCosts(lineId, purchaseOrder, spid, correlationNum)
+            //CostOverrides: buildLineItemCosts(lineId, purchaseOrder, spid, correlationNum)
+            QuantityUM: "Packages"
         };
     }
 
@@ -169,12 +169,11 @@
     function buildPOCosts(purchaseOrder) {
         // Use a Map to aggregate costs by category
         const costMap = new Map();
-        let costSequence = 0;
         
-        // Query ALL costs for this PO (both PO-level and line-level)
         const recCosts = new GlideRecord('sn_shop_cost_allocation');
         recCosts.addQuery('x_supr2_supreme_ca_purchase_order', purchaseOrder.sys_id.toString());
         recCosts.setLimit(CONFIG.COST_RECORD_LIMIT);
+        recCosts.orderBy('sys_created_on'); // Maintain order for consistency
         recCosts.query();
         
         while (recCosts.next()) {
@@ -183,18 +182,13 @@
             const percentage = parseFloatOrNull(recCosts.allocation_percentage);
             const apportionBy = recCosts.getValue('x_supr2_supreme_ca_apportion_by');
             
-            // Get or create correlation sequence for this cost record
-            const sequence = getOrCreateCostSequence(recCosts, costSequence);
-            
             if (costMap.has(category)) {
                 // Aggregate existing entry
                 const existing = costMap.get(category);
                 existing.Amount = (existing.Amount || 0) + (amount || 0);
                 
-                // Keep the lowest sequence number for this category
-                existing.Sequence = Math.min(existing.Sequence, sequence);
-                
                 // For percentage, take the sum if both are percentages
+                // Otherwise, clear it as mixed allocation types
                 if (existing.Percentage !== null && percentage !== null) {
                     existing.Percentage = existing.Percentage + percentage;
                 } else if (existing.Percentage !== null || percentage !== null) {
@@ -208,7 +202,6 @@
             } else {
                 // Create new entry
                 costMap.set(category, {
-                    Sequence: sequence,
                     CostCategory: category,
                     Amount: amount,
                     Percentage: percentage,
@@ -217,21 +210,59 @@
                     ExchangeRate: null
                 });
             }
-            
-            costSequence++;
         }
         
-        // Convert map to array sorted by sequence
-        const costs = Array.from(costMap.values()).sort((a, b) => a.Sequence - b.Sequence);
+        // Convert map to array and assign sequences
+        const costs = [];
+        let costSequence = 0;
+        
+        for (const costEntry of costMap.values()) {
+            costs.push({
+                Sequence: costSequence++,
+                ...costEntry
+            });
+        }
         
         return costs;
     }
 
     // === Build Line Item Costs ===
     function buildLineItemCosts(lineId, purchaseOrder, spid, correlationNum) {
-        // Only return the base RMC cost for line items
-        // All other costs are now aggregated at the PO level
-        return [buildBaseCost(lineId, spid, correlationNum)];
+        const costs = [];
+        
+        // Add base cost (sequence 0)
+        costs.push(buildBaseCost(lineId, spid, correlationNum));
+        
+        // Add additional costs
+        const recCosts = new GlideRecord('sn_shop_cost_allocation');
+        recCosts.addQuery('order_line', lineId);
+        recCosts.addQuery('x_supr2_supreme_ca_purchase_order', purchaseOrder.sys_id.toString());
+        recCosts.setLimit(CONFIG.COST_RECORD_LIMIT);
+        recCosts.orderBy('sys_created_on');
+        recCosts.query();
+        
+        while (recCosts.next()) {
+            const amount = parseCurrencyAmount(recCosts.getDisplayValue('allocation_amount'));
+            const costType = recCosts.getValue('allocation_in');
+            const percentRaw = recCosts.getValue('allocation_percentage') || '';
+            const percent = percentRaw.replace(/%/g, '');
+
+            let costPayload = {
+                CostCategory: recCosts.getDisplayValue('x_supr2_supreme_ca_category')
+            };
+
+            if (costType === 'amount') {
+                costPayload.Cost = Number(amount);
+            } else if (costType === 'percentage') {
+                costPayload.Percentage = Number(percent);
+            }
+
+            costs.push(costPayload);
+
+            
+        }
+        
+        return costs;
     }
 
     // === Build Base Cost (Sequence 0) ===
@@ -248,34 +279,6 @@
             Cost: parseCurrencyAmount(lineRec.getDisplayValue('unit_price')),
             TotalCost: parseCurrencyAmount(lineRec.getDisplayValue('total_line_amount'))
         };
-    }
-
-    // === Cost Sequence Management ===
-    function getOrCreateCostSequence(costRecord, defaultSequence) {
-        const lookup = new GlideRecord('x_supr2_supreme_ca_correlation_lookup');
-        lookup.addEncodedQuery('source=' + CONFIG.COST_SOURCE + '^active=true^record=' + costRecord.sys_id.toString());
-        lookup.setLimit(1);
-        lookup.query();
-        
-        if (lookup.next()) {
-            return Number(lookup.correlation_id) || defaultSequence;
-        }
-        
-        // Create new lookup record
-        createLookupRecord(costRecord.sys_id.toString(), defaultSequence);
-        return defaultSequence;
-    }
-
-    // === Create Lookup Record ===
-    function createLookupRecord(recordId, sequence) {
-        const lookup = new GlideRecord('x_supr2_supreme_ca_correlation_lookup');
-        lookup.initialize();
-        lookup.source = CONFIG.COST_SOURCE;
-        lookup.record = recordId;
-        lookup.correlation_id = sequence.toString();
-        lookup.table = CONFIG.COST_TABLE;
-        lookup.active = true;
-        lookup.insert();
     }
 
     // === Utility Functions ===
