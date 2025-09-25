@@ -171,23 +171,17 @@
         const costMap = new Map();
         let costSequence = 0;
         
+        // Query ALL costs for this PO (both PO-level and line-level)
         const recCosts = new GlideRecord('sn_shop_cost_allocation');
         recCosts.addQuery('x_supr2_supreme_ca_purchase_order', purchaseOrder.sys_id.toString());
-        recCosts.addNullQuery('order_line');
         recCosts.setLimit(CONFIG.COST_RECORD_LIMIT);
         recCosts.query();
-        
-        // Debug logging to help identify missing costs
-        gs.info('TPP Chempax: Found ' + recCosts.getRowCount() + ' PO-level costs');
         
         while (recCosts.next()) {
             const category = recCosts.getDisplayValue('x_supr2_supreme_ca_category');
             const amount = parseCurrencyAmount(recCosts.getDisplayValue('allocation_amount'));
             const percentage = parseFloatOrNull(recCosts.allocation_percentage);
             const apportionBy = recCosts.getValue('x_supr2_supreme_ca_apportion_by');
-            
-            // Debug log each cost
-            gs.info('TPP Chempax: Processing PO cost - Category: ' + category + ', Amount: ' + amount);
             
             // Get or create correlation sequence for this cost record
             const sequence = getOrCreateCostSequence(recCosts, costSequence);
@@ -227,9 +221,6 @@
             costSequence++;
         }
         
-        // Debug final categories
-        gs.info('TPP Chempax: Final PO cost categories: ' + Array.from(costMap.keys()).join(', '));
-        
         // Convert map to array sorted by sequence
         const costs = Array.from(costMap.values()).sort((a, b) => a.Sequence - b.Sequence);
         
@@ -238,37 +229,9 @@
 
     // === Build Line Item Costs ===
     function buildLineItemCosts(lineId, purchaseOrder, spid, correlationNum) {
-        const costs = [];
-        
-        // Add base cost (sequence 0)
-        costs.push(buildBaseCost(lineId, spid, correlationNum));
-        
-        // Add additional costs
-        let costSequence = 1;
-        const recCosts = new GlideRecord('sn_shop_cost_allocation');
-        recCosts.addQuery('order_line', lineId);
-        recCosts.addQuery('x_supr2_supreme_ca_purchase_order', purchaseOrder.sys_id.toString());
-        recCosts.setLimit(CONFIG.COST_RECORD_LIMIT);
-        recCosts.query();
-        
-        while (recCosts.next()) {
-            const sequence = getOrCreateCostSequence(recCosts, costSequence);
-            const amount = parseCurrencyAmount(recCosts.getDisplayValue('allocation_amount'));
-            
-            costs.push({
-                Sequence: sequence,
-                CostCategory: recCosts.getDisplayValue('x_supr2_supreme_ca_category'),
-                PurchaseOrderNumber: correlationNum,
-                SPID: spid,
-                Cost: amount,
-                TotalCost: amount,
-                CostType: CONFIG.BASE_COST_TYPE
-            });
-            
-            costSequence++;
-        }
-        
-        return costs;
+        // Only return the base RMC cost for line items
+        // All other costs are now aggregated at the PO level
+        return [buildBaseCost(lineId, spid, correlationNum)];
     }
 
     // === Build Base Cost (Sequence 0) ===

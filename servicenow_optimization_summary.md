@@ -105,20 +105,26 @@ To use the optimized version:
 
 ## Cost Aggregation Logic
 
-The `buildPOCosts` function now includes intelligent cost aggregation:
+The optimized script now handles costs differently to meet Chempax requirements:
 
-1. **Category Grouping**: Multiple cost entries with the same category are combined into a single entry
-2. **Amount Aggregation**: All amounts for the same category are summed together
-3. **Percentage Handling**: 
+### PO-Level Costs (`buildPOCosts`)
+1. **Includes ALL Costs**: Queries all cost allocations for the PO (both PO-level and line-level)
+2. **Category Grouping**: Multiple cost entries with the same category are combined into a single entry
+3. **Amount Aggregation**: All amounts for the same category are summed together
+4. **Percentage Handling**: 
    - If all entries for a category use percentages, they are summed
    - If mixed (some percentage, some amount), percentage is set to null
-4. **ApportionBy Handling**: 
+5. **ApportionBy Handling**: 
    - If all entries for a category have the same apportion method, it's preserved
    - If different methods exist for the same category, it's set to null
 
 Example:
-- Input: Broker Fees $100, Broker Fees $150
-- Output: Single entry for Broker Fees $250
+- Input: Broker Fees $100, Broker Fees $150, Drayage $200, Export Freight $300
+- Output: Single entry for each category with aggregated amounts
+
+### Line-Item Costs (`buildLineItemCosts`)
+- **Only RMC Base Cost**: Returns only the sequence 0 RMC (Raw Material Cost) for each line item
+- **No Additional Costs**: All other costs are aggregated at the PO level to prevent duplication
 
 ## Future Enhancement Opportunities
 
