@@ -169,13 +169,16 @@
     function buildPOCosts(purchaseOrder) {
         // Use a Map to aggregate costs by category
         const costMap = new Map();
+        let costSequence = 0;
         
         const recCosts = new GlideRecord('sn_shop_cost_allocation');
         recCosts.addQuery('x_supr2_supreme_ca_purchase_order', purchaseOrder.sys_id.toString());
         recCosts.addNullQuery('order_line');
         recCosts.setLimit(CONFIG.COST_RECORD_LIMIT);
-        recCosts.orderBy('sys_created_on'); // Maintain order for consistency
         recCosts.query();
+        
+        // Debug logging to help identify missing costs
+        gs.info('TPP Chempax: Found ' + recCosts.getRowCount() + ' PO-level costs');
         
         while (recCosts.next()) {
             const category = recCosts.getDisplayValue('x_supr2_supreme_ca_category');
@@ -183,13 +186,21 @@
             const percentage = parseFloatOrNull(recCosts.allocation_percentage);
             const apportionBy = recCosts.getValue('x_supr2_supreme_ca_apportion_by');
             
+            // Debug log each cost
+            gs.info('TPP Chempax: Processing PO cost - Category: ' + category + ', Amount: ' + amount);
+            
+            // Get or create correlation sequence for this cost record
+            const sequence = getOrCreateCostSequence(recCosts, costSequence);
+            
             if (costMap.has(category)) {
                 // Aggregate existing entry
                 const existing = costMap.get(category);
                 existing.Amount = (existing.Amount || 0) + (amount || 0);
                 
+                // Keep the lowest sequence number for this category
+                existing.Sequence = Math.min(existing.Sequence, sequence);
+                
                 // For percentage, take the sum if both are percentages
-                // Otherwise, clear it as mixed allocation types
                 if (existing.Percentage !== null && percentage !== null) {
                     existing.Percentage = existing.Percentage + percentage;
                 } else if (existing.Percentage !== null || percentage !== null) {
@@ -203,6 +214,7 @@
             } else {
                 // Create new entry
                 costMap.set(category, {
+                    Sequence: sequence,
                     CostCategory: category,
                     Amount: amount,
                     Percentage: percentage,
@@ -211,18 +223,15 @@
                     ExchangeRate: null
                 });
             }
+            
+            costSequence++;
         }
         
-        // Convert map to array and assign sequences
-        const costs = [];
-        let costSequence = 0;
+        // Debug final categories
+        gs.info('TPP Chempax: Final PO cost categories: ' + Array.from(costMap.keys()).join(', '));
         
-        for (const costEntry of costMap.values()) {
-            costs.push({
-                Sequence: costSequence++,
-                ...costEntry
-            });
-        }
+        // Convert map to array sorted by sequence
+        const costs = Array.from(costMap.values()).sort((a, b) => a.Sequence - b.Sequence);
         
         return costs;
     }
