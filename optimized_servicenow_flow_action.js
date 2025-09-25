@@ -167,29 +167,61 @@
 
     // === Build PO-level Costs ===
     function buildPOCosts(purchaseOrder) {
-        const costs = [];
-        let costSequence = 0;
+        // Use a Map to aggregate costs by category
+        const costMap = new Map();
         
         const recCosts = new GlideRecord('sn_shop_cost_allocation');
         recCosts.addQuery('x_supr2_supreme_ca_purchase_order', purchaseOrder.sys_id.toString());
         recCosts.addNullQuery('order_line');
         recCosts.setLimit(CONFIG.COST_RECORD_LIMIT);
+        recCosts.orderBy('sys_created_on'); // Maintain order for consistency
         recCosts.query();
         
         while (recCosts.next()) {
-            const sequence = getOrCreateCostSequence(recCosts, costSequence);
+            const category = recCosts.getDisplayValue('x_supr2_supreme_ca_category');
+            const amount = parseCurrencyAmount(recCosts.getDisplayValue('allocation_amount'));
+            const percentage = parseFloatOrNull(recCosts.allocation_percentage);
+            const apportionBy = recCosts.getValue('x_supr2_supreme_ca_apportion_by');
             
+            if (costMap.has(category)) {
+                // Aggregate existing entry
+                const existing = costMap.get(category);
+                existing.Amount = (existing.Amount || 0) + (amount || 0);
+                
+                // For percentage, take the sum if both are percentages
+                // Otherwise, clear it as mixed allocation types
+                if (existing.Percentage !== null && percentage !== null) {
+                    existing.Percentage = existing.Percentage + percentage;
+                } else if (existing.Percentage !== null || percentage !== null) {
+                    existing.Percentage = null; // Mixed allocation types
+                }
+                
+                // Keep the first apportion method, or clear if different
+                if (existing.ApportionBy !== apportionBy) {
+                    existing.ApportionBy = null;
+                }
+            } else {
+                // Create new entry
+                costMap.set(category, {
+                    CostCategory: category,
+                    Amount: amount,
+                    Percentage: percentage,
+                    ApportionBy: apportionBy,
+                    UnitOfCurrency: null,
+                    ExchangeRate: null
+                });
+            }
+        }
+        
+        // Convert map to array and assign sequences
+        const costs = [];
+        let costSequence = 0;
+        
+        for (const costEntry of costMap.values()) {
             costs.push({
-                Sequence: sequence,
-                CostCategory: recCosts.getDisplayValue('x_supr2_supreme_ca_category'),
-                Percentage: parseFloatOrNull(recCosts.allocation_percentage),
-                Amount: parseCurrencyAmount(recCosts.getDisplayValue('allocation_amount')),
-                ApportionBy: recCosts.getValue('x_supr2_supreme_ca_apportion_by'),
-                UnitOfCurrency: null,
-                ExchangeRate: null
+                Sequence: costSequence++,
+                ...costEntry
             });
-            
-            costSequence++;
         }
         
         return costs;

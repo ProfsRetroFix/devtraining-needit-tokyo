@@ -103,6 +103,23 @@ To use the optimized version:
 3. Verify all integrations work as expected
 4. Monitor logs for any error messages
 
+## Cost Aggregation Logic
+
+The `buildPOCosts` function now includes intelligent cost aggregation:
+
+1. **Category Grouping**: Multiple cost entries with the same category are combined into a single entry
+2. **Amount Aggregation**: All amounts for the same category are summed together
+3. **Percentage Handling**: 
+   - If all entries for a category use percentages, they are summed
+   - If mixed (some percentage, some amount), percentage is set to null
+4. **ApportionBy Handling**: 
+   - If all entries for a category have the same apportion method, it's preserved
+   - If different methods exist for the same category, it's set to null
+
+Example:
+- Input: Broker Fees $100, Broker Fees $150
+- Output: Single entry for Broker Fees $250
+
 ## Future Enhancement Opportunities
 
 1. **Caching**: Consider caching frequently accessed configuration data
@@ -110,3 +127,4 @@ To use the optimized version:
 3. **Async Operations**: Where ServiceNow platform allows
 4. **Field Mapping**: Create a configuration table for field mappings
 5. **Validation**: Add input validation for critical fields
+6. **Cost Aggregation Rules**: Make aggregation rules configurable per cost category
